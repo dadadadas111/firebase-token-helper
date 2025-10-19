@@ -15,7 +15,6 @@ Prerequisites
 Install
 
 ```powershell
-cd D:\NODEJS\firebase-token-helper
 npm install
 ```
 
