@@ -40,6 +40,45 @@ const argv = yargs
   .help()
   .alias("h", "help").argv;
 
+  const CACHE_FILE = path.resolve(process.cwd(), '.token-helper-cache');
+
+  function encodeSafe(obj) {
+    // base64 encode JSON
+    return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');
+  }
+
+  function decodeSafe(str) {
+    try {
+      return JSON.parse(Buffer.from(str, 'base64').toString('utf8'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function readCache() {
+    try {
+      if (!fs.existsSync(CACHE_FILE)) return null;
+      const raw = fs.readFileSync(CACHE_FILE, 'utf8').trim();
+      if (!raw) return null;
+      return decodeSafe(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeCache(obj) {
+    try {
+      const safe = Object.assign({}, obj);
+      // do not store idToken or refreshToken; only store setup fields
+      delete safe.idToken;
+      delete safe.refreshToken;
+      const out = encodeSafe(safe);
+      fs.writeFileSync(CACHE_FILE, out, { encoding: 'utf8', mode: 0o600 });
+    } catch (e) {
+      // ignore
+    }
+  }
+
 // interactive prompt helper (lazy require for compatibility)
 async function prompt(question) {
   try {
@@ -142,6 +181,22 @@ async function main() {
   let serviceAccount = argv.serviceAccount || process.env.GOOGLE_APPLICATION_CREDENTIALS;
   let apiKey = argv.apiKey || process.env.FIREBASE_API_KEY;
 
+  // Offer to load cache if present and no flags provided for the main values
+  const cache = readCache();
+  if (cache) {
+    const anyFlag = argv.uid || argv.serviceAccount || argv.apiKey || argv.projectId;
+    if (!anyFlag) {
+      const load = await prompt(`Found saved setup from ${new Date(cache.timestamp).toLocaleString()}. Load it? (y/N): `);
+      if (load.toLowerCase() === 'y' || load.toLowerCase() === 'yes') {
+        uid = uid || cache.uid;
+        serviceAccount = serviceAccount || cache.serviceAccount;
+        apiKey = apiKey || cache.apiKey;
+        argv.projectId = argv.projectId || cache.projectId;
+        console.log(colorText('Loaded cached setup.', colors.dim));
+      }
+    }
+  }
+
   if (!uid) {
     uid = await prompt('Enter UID to mint token for: ');
     if (!uid) {
@@ -192,6 +247,10 @@ async function main() {
     const exchanged = await exchangeCustomTokenForIdToken(customToken, apiKey);
     console.log(colorText('\nExchanged token result:', colors.green));
     console.log(colorText(JSON.stringify(exchanged, null, 2), colors.yellow));
+    // Save the setup to cache (do not store tokens)
+    try {
+      writeCache({ uid, serviceAccount, apiKey, projectId: argv.projectId || process.env.FIREBASE_PROJECT_ID, timestamp: Date.now() });
+    } catch (e) {}
   } catch (err) {
     console.error(colorText('Error:', colors.red), colorText(err.message || err, colors.red));
     process.exit(3);
