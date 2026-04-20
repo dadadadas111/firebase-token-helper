@@ -1,262 +1,293 @@
 #!/usr/bin/env node
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
-let fetch;
-// node-fetch v3 is ESM-only. Load it dynamically so this file can remain CommonJS.
-async function loadFetch() {
-  if (fetch) return fetch;
-  const mod = await import('node-fetch');
-  // node-fetch exposes default export
-  fetch = mod.default || mod;
-  return fetch;
-}
-const admin = require("firebase-admin");
-const yargs = require("yargs");
-require("dotenv").config();
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-// Small ANSI color helper (no external deps)
-const colors = {
-  reset: '\x1b[0m',
-  bold: '\x1b[1m',
-  dim: '\x1b[2m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  cyan: '\x1b[36m',
-};
-
-function colorText(text, col) {
-  return `${col}${text}${colors.reset}`;
+const [major] = process.versions.node.split('.').map(Number);
+if (major < 18) {
+  console.error('firebase-token-kit requires Node.js 18 or later.');
+  process.exit(1);
 }
 
-const argv = yargs
-  .usage("Usage: $0 --uid UID [--serviceAccount path] [--apiKey key] [--projectId id]")
-  .option("uid", { type: "string", describe: "Firebase user UID to mint token for" })
-  .option("serviceAccount", { type: "string", describe: "Path to service account JSON file (or set GOOGLE_APPLICATION_CREDENTIALS)" })
-  .option("apiKey", { type: "string", describe: "Web API key for Firebase project (can be set in FIREBASE_API_KEY env)" })
-  .option("projectId", { type: "string", describe: "Firebase project id (optional)" })
+require('dotenv').config();
+
+const yargs  = require('yargs');
+const logger = require('./src/lib/logger');
+
+// ─── Global safety net ────────────────────────────────────────────────────────
+// Catches anything that slips past local try/catch blocks.
+
+process.on('uncaughtException', (err) => {
+  logger.err(`Unexpected error: ${err.message}`);
+  if (process.env.DEBUG) console.error(err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  logger.err(`Unexpected async error: ${msg}`);
+  if (process.env.DEBUG) console.error(reason);
+  process.exit(1);
+});
+
+// ─── Arg parsing (no async handlers — dispatched manually below) ──────────────
+
+const cli = yargs
+  .scriptName('ftk')
+  .usage('$0 [command] [options]\n\nRun without arguments to launch the interactive TUI.')
+  .command('get-token', 'Mint a Firebase ID token for a given UID or email', (y) => y
+    .option('uid',            { type: 'string',  describe: 'Firebase user UID (mutually exclusive with --email)' })
+    .option('email',          { type: 'string',  describe: 'User email — UID is looked up via Admin SDK (mutually exclusive with --uid)' })
+    .option('apiKey',         { type: 'string',  describe: 'Firebase Web API Key (or FIREBASE_API_KEY env)' })
+    .option('serviceAccount', { type: 'string',  describe: 'Path to service account JSON (or GOOGLE_APPLICATION_CREDENTIALS env)' })
+    .option('projectId',      { type: 'string',  describe: 'Firebase project ID (optional)' })
+    .option('json',           { type: 'boolean', describe: 'Output raw JSON only (for piping)', default: false })
+    .conflicts('uid', 'email')
+  )
+  .command('clear-cache', 'View and remove saved setup values', (y) => y
+    .option('all', { type: 'boolean', describe: 'Clear the entire cache without prompting', default: false })
+  )
+  .command('set-claims', 'Set custom claims on a Firebase user via their ID token', (y) => y
+    .option('token',          { type: 'string',  describe: 'Firebase ID Token (JWT)' })
+    .option('claims',         { type: 'string',  describe: "Custom claims as JSON string, e.g. '{\"role\":\"admin\"}'" })
+    .option('serviceAccount', { type: 'string',  describe: 'Path to service account JSON' })
+    .option('projectId',      { type: 'string',  describe: 'Firebase project ID (optional)' })
+    .option('json',           { type: 'boolean', describe: 'Output raw JSON only', default: false })
+  )
+  .demandCommand(0)
   .help()
-  .alias("h", "help").argv;
+  .alias('h', 'help')
+  .alias('v', 'version')
+  .strict(false); // allow unknown options without throwing before we can handle them
 
-  const CACHE_FILE = path.resolve(process.cwd(), '.token-helper-cache');
-
-  function encodeSafe(obj) {
-    // base64 encode JSON
-    return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');
-  }
-
-  function decodeSafe(str) {
-    try {
-      return JSON.parse(Buffer.from(str, 'base64').toString('utf8'));
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function readCache() {
-    try {
-      if (!fs.existsSync(CACHE_FILE)) return null;
-      const raw = fs.readFileSync(CACHE_FILE, 'utf8').trim();
-      if (!raw) return null;
-      return decodeSafe(raw);
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function writeCache(obj) {
-    try {
-      const safe = Object.assign({}, obj);
-      // do not store idToken or refreshToken; only store setup fields
-      delete safe.idToken;
-      delete safe.refreshToken;
-      const out = encodeSafe(safe);
-      fs.writeFileSync(CACHE_FILE, out, { encoding: 'utf8', mode: 0o600 });
-    } catch (e) {
-      // ignore
-    }
-  }
-
-// interactive prompt helper (lazy require for compatibility)
-async function prompt(question) {
-  try {
-    const rl = require('readline/promises');
-    const { stdin, stdout } = process;
-    const rlInterface = rl.createInterface({ input: stdin, output: stdout });
-    const answer = await rlInterface.question(colorText(question, colors.cyan));
-    rlInterface.close();
-    return answer.trim();
-  } catch (e) {
-    // fallback
-    return new Promise((resolve) => {
-      const rl2 = require('readline').createInterface({ input: process.stdin, output: process.stdout });
-      rl2.question(colorText(question, colors.cyan), (ans) => { rl2.close(); resolve(ans.trim()); });
-    });
-  }
+// parseSync is safe here because NO async handlers are registered above.
+let argv;
+try {
+  argv = cli.parseSync();
+} catch (err) {
+  logger.err(`Argument error: ${err.message}`);
+  process.exit(1);
 }
 
-async function initAdmin(serviceAccountPath) {
-  if (admin.apps && admin.apps.length) return;
+// ─── Dispatch ─────────────────────────────────────────────────────────────────
 
-  let options = {};
-  // Priority: explicit path -> GOOGLE_APPLICATION_CREDENTIALS -> .firebase auto-detect
-  if (serviceAccountPath) {
-    const full = path.resolve(serviceAccountPath);
-    if (!fs.existsSync(full)) throw new Error(`Service account file not found: ${full}`);
-    const sa = require(full);
-    options = { credential: admin.credential.cert(sa) };
-  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    options = { credential: admin.credential.applicationDefault() };
-  } else {
-    // try auto-detect in .firebase folder at CWD
-    const candidateDir = path.resolve(process.cwd(), ".firebase");
-    if (fs.existsSync(candidateDir) && fs.statSync(candidateDir).isDirectory()) {
-      const files = fs.readdirSync(candidateDir).filter(f => f.endsWith('.json'));
-      let picked = null;
-      for (const f of files) {
-        const full = path.join(candidateDir, f);
-        try {
-          const content = JSON.parse(fs.readFileSync(full, 'utf8'));
-          // heuristic: service account JSON contains client_email and private_key
-          if (content.client_email && content.private_key) {
-            picked = full;
-            break;
-          }
-        } catch (e) {
-          // ignore parse errors
-        }
-      }
+const [cmd] = argv._ ?? [];
 
-      if (picked) {
-        const sa = require(picked);
-        options = { credential: admin.credential.cert(sa) };
-      } else {
-        throw new Error("No service account found. Place a service account JSON in .firebase/ or pass --serviceAccount or set GOOGLE_APPLICATION_CREDENTIALS env var.");
-      }
-    } else {
-      throw new Error("No service account provided. Pass --serviceAccount or set GOOGLE_APPLICATION_CREDENTIALS env var, or put a service account JSON into .firebase/");
-    }
-  }
+(async () => {
+  if      (cmd === 'get-token')    await cliGetToken(argv);
+  else if (cmd === 'set-claims')   await cliSetClaims(argv);
+  else if (cmd === 'clear-cache')  await cliClearCache(argv);
+  else                             await runTui();
+})().catch((err) => {
+  // Final fallback — should rarely fire since each handler catches its own errors.
+  logger.err(`Fatal: ${err.message || err}`);
+  if (process.env.DEBUG) console.error(err);
+  process.exit(1);
+});
 
-  if (argv.projectId || process.env.FIREBASE_PROJECT_ID) {
-    options.projectId = argv.projectId || process.env.FIREBASE_PROJECT_ID;
-  }
+// ─── CLI: get-token ───────────────────────────────────────────────────────────
 
-  admin.initializeApp(options);
-}
+async function cliGetToken(argv) {
+  const { prompt }   = require('./src/lib/prompt');
+  const { readCache } = require('./src/lib/cache');
+  const { autoDetectServiceAccount } = require('./src/lib/admin');
+  const { run }      = require('./src/commands/getToken');
 
-async function createCustomToken(uid) {
-  return admin.auth().createCustomToken(uid);
-}
+  logger.banner('Firebase Token Kit', `v${require('./package.json').version}`);
 
-async function exchangeCustomTokenForIdToken(customToken, apiKey) {
-  if (!apiKey) throw new Error("Need Firebase Web API key to exchange custom token for ID token (FIREBASE_API_KEY or --apiKey)");
-
-  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(apiKey)}`;
-  const body = {
-    token: customToken,
-    returnSecureToken: true,
-  };
-
-  const _fetch = await loadFetch();
-  const res = await _fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    const msg = data && data.error && data.error.message ? data.error.message : JSON.stringify(data);
-    throw new Error(`Failed to exchange custom token: ${msg}`);
-  }
-  return data; // contains idToken, refreshToken, expiresIn, localId
-}
-
-async function main() {
-  // gather inputs, prompting interactively if missing
-  let uid = argv.uid;
-  let serviceAccount = argv.serviceAccount || process.env.GOOGLE_APPLICATION_CREDENTIALS;
-  let apiKey = argv.apiKey || process.env.FIREBASE_API_KEY;
-
-  // Offer to load cache if present and no flags provided for the main values
   const cache = readCache();
-  if (cache) {
-    const anyFlag = argv.uid || argv.serviceAccount || argv.apiKey || argv.projectId;
-    if (!anyFlag) {
-      const load = await prompt(`Found saved setup from ${new Date(cache.timestamp).toLocaleString()}. Load it? (y/N): `);
-      if (load.toLowerCase() === 'y' || load.toLowerCase() === 'yes') {
-        uid = uid || cache.uid;
-        serviceAccount = serviceAccount || cache.serviceAccount;
-        apiKey = apiKey || cache.apiKey;
-        argv.projectId = argv.projectId || cache.projectId;
-        console.log(colorText('Loaded cached setup.', colors.dim));
-      }
-    }
+  let { uid, email, apiKey, serviceAccount, projectId } = argv;
+
+  // Resolve: flag → env/cache → auto-detect → interactive prompt
+  if (!uid && !email)  uid            = cache?.uid;
+  if (!apiKey)         apiKey         = process.env.FIREBASE_API_KEY  || cache?.apiKey;
+  if (!serviceAccount) serviceAccount = cache?.serviceAccount;
+  if (!projectId)      projectId      = process.env.FIREBASE_PROJECT_ID;
+
+  const autoSa = autoDetectServiceAccount();
+  if (!serviceAccount && autoSa) {
+    serviceAccount = autoSa;
+    logger.dim(`Auto-detected service account: ${autoSa}`);
   }
 
-  if (!uid) {
-    uid = await prompt('Enter UID to mint token for: ');
-    if (!uid) {
-      console.error('No UID provided, aborting.');
-      process.exit(1);
-    }
+  if (!uid && !email) {
+    const input = await prompt('UID or Email: ');
+    if (!input) { logger.err('UID or email is required'); process.exit(1); }
+    if (input.includes('@')) email = input;
+    else                     uid   = input;
   }
 
   if (!apiKey) {
-    const maybe = await prompt('Enter Firebase Web API key (or press Enter to leave empty): ');
-    if (maybe) apiKey = maybe;
+    logger.dim('Tip: add FIREBASE_API_KEY to .env to skip this prompt (it is not a secret).');
+    logger.dim('Find it at: Firebase Console → Project Settings → General → Web API Key');
+    apiKey = await prompt('Firebase Web API Key: ');
+    if (!apiKey) { logger.err('API Key is required'); process.exit(1); }
   }
 
-  // If no service account env/arg, try auto-detect; if that fails, prompt for path
   if (!serviceAccount) {
-    const candidateDir = path.resolve(process.cwd(), '.firebase');
-    let picked = null;
-    if (fs.existsSync(candidateDir) && fs.statSync(candidateDir).isDirectory()) {
-      const files = fs.readdirSync(candidateDir).filter(f => f.endsWith('.json'));
-      for (const f of files) {
-        const full = path.join(candidateDir, f);
-        try {
-          const content = JSON.parse(fs.readFileSync(full, 'utf8'));
-          if (content.client_email && content.private_key) { picked = full; break; }
-        } catch (e){}
-      }
-    }
-    if (picked) {
-      serviceAccount = picked;
-      console.log(colorText('Auto-detected service account:', colors.dim), colorText(serviceAccount, colors.yellow));
-    } else {
-      const ans = await prompt('Service account path not found. Enter path to service account JSON (or press Enter to abort): ');
-      if (ans) serviceAccount = ans;
-    }
+    serviceAccount = await prompt('Path to service account JSON: ');
+    if (!serviceAccount) { logger.err('Service account path is required'); process.exit(1); }
   }
 
+  logger.step(email ? `Looking up user by email and minting token…` : 'Creating custom token…');
+  let result;
   try {
-    await initAdmin(serviceAccount);
+    result = await run({ uid, email, apiKey, serviceAccountPath: serviceAccount, projectId });
   } catch (err) {
-    console.error("Failed to initialize Firebase Admin:", err.message);
+    logger.err(err.message);
     process.exit(2);
   }
+  logger.ok('Custom token created');
+  logger.ok('ID token ready');
 
-  try {
-    const customToken = await createCustomToken(uid);
-    console.log(colorText('\nCustom token created:', colors.green), colorText(customToken, colors.dim));
-
-    const exchanged = await exchangeCustomTokenForIdToken(customToken, apiKey);
-    console.log(colorText('\nExchanged token result:', colors.green));
-    console.log(colorText(JSON.stringify(exchanged, null, 2), colors.yellow));
-    // Save the setup to cache (do not store tokens)
-    try {
-      writeCache({ uid, serviceAccount, apiKey, projectId: argv.projectId || process.env.FIREBASE_PROJECT_ID, timestamp: Date.now() });
-    } catch (e) {}
-  } catch (err) {
-    console.error(colorText('Error:', colors.red), colorText(err.message || err, colors.red));
-    process.exit(3);
+  if (argv.json) {
+    process.stdout.write(JSON.stringify({
+      idToken:      result.idToken,
+      refreshToken: result.refreshToken,
+      expiresIn:    result.expiresIn,
+      localId:      result.localId,
+    }, null, 2) + '\n');
+    return;
   }
+
+  logger.box('Result', [
+    { label: 'UID',      value: result.resolvedUid ?? result.localId },
+    { label: 'Email',    value: result.resolvedEmail ?? '—' },
+    { label: 'Expires',  value: result.expiry?.label ?? `${result.expiresIn}s` },
+    { label: 'ID Token', value: result.idToken },
+  ]);
 }
 
-if (require.main === module) {
-  main();
+// ─── CLI: set-claims ──────────────────────────────────────────────────────────
+
+async function cliSetClaims(argv) {
+  const { prompt } = require('./src/lib/prompt');
+  const { autoDetectServiceAccount } = require('./src/lib/admin');
+  const { run }    = require('./src/commands/setClaims');
+
+  logger.banner('Firebase Token Kit', `v${require('./package.json').version}`);
+
+  let { token, claims, serviceAccount, projectId } = argv;
+
+  if (!projectId) projectId = process.env.FIREBASE_PROJECT_ID;
+
+  const autoSa = autoDetectServiceAccount();
+  if (!serviceAccount && autoSa) {
+    serviceAccount = autoSa;
+    logger.dim(`Auto-detected service account: ${autoSa}`);
+  }
+
+  if (!token) {
+    token = await prompt('Firebase ID Token (JWT): ');
+    if (!token) { logger.err('Token is required'); process.exit(1); }
+  }
+
+  if (!claims) {
+    logger.dim('Example: {"role":"admin"}');
+    claims = await prompt('Custom claims (JSON): ');
+    if (!claims) { logger.err('Claims JSON is required'); process.exit(1); }
+  }
+
+  // Validate JSON before sending to Firebase
+  try {
+    const parsed = JSON.parse(claims);
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('must be a JSON object');
+  } catch (err) {
+    logger.err(`Invalid claims JSON: ${err.message}`);
+    process.exit(1);
+  }
+
+  if (!serviceAccount) {
+    serviceAccount = await prompt('Path to service account JSON: ');
+    if (!serviceAccount) { logger.err('Service account path is required'); process.exit(1); }
+  }
+
+  logger.step('Setting custom claims…');
+  let result;
+  try {
+    result = await run({ token, claimsJson: claims, serviceAccountPath: serviceAccount, projectId });
+  } catch (err) {
+    logger.err(err.message);
+    process.exit(2);
+  }
+  logger.ok(`Claims set for UID: ${result.uid}`);
+
+  if (argv.json) {
+    process.stdout.write(JSON.stringify(result.customClaims, null, 2) + '\n');
+    return;
+  }
+
+  logger.box('Claims Set', [
+    { label: 'UID',     value: result.uid },
+    { label: 'Email',   value: result.email ?? '—' },
+    { label: 'Project', value: result.projectId },
+    { label: 'Claims',  value: JSON.stringify(result.customClaims) },
+  ]);
+  logger.warn('User must refresh their token to see updated claims.');
+}
+
+// ─── CLI: clear-cache ─────────────────────────────────────────────────────────
+
+async function cliClearCache(argv) {
+  const { readCache, clearCacheFields, clearAllCache, describeCacheField, CACHE_FILE } = require('./src/lib/cache');
+  const { prompt } = require('./src/lib/prompt');
+
+  const cache = readCache();
+
+  if (!cache) {
+    logger.ok('Cache is empty — nothing to clear.');
+    logger.dim(`Cache file: ${CACHE_FILE}`);
+    return;
+  }
+
+  const CLEARABLE = ['uid', 'apiKey', 'serviceAccount', 'projectId'];
+  const present   = CLEARABLE.filter(f => cache[f] != null);
+  const savedOn   = cache.timestamp ? new Date(cache.timestamp).toLocaleString() : '—';
+
+  logger.banner('Cache', `saved ${savedOn}`);
+  present.forEach(f => {
+    const { label, hint } = describeCacheField(f, cache[f]);
+    logger.raw(`  ${logger.paint(label.padEnd(16), logger.colors.dim)}  ${hint}`);
+  });
+  logger.divider();
+
+  if (argv.all) {
+    clearAllCache();
+    logger.ok('Cache cleared.');
+    return;
+  }
+
+  // Interactive field selection
+  logger.raw('\n  Which fields do you want to remove?');
+  logger.dim(`  Enter numbers separated by commas, "all" to clear everything, or Enter to cancel.`);
+  present.forEach((f, i) => {
+    const { label, hint } = describeCacheField(f, cache[f]);
+    logger.raw(`  ${logger.paint(`[${i + 1}]`, logger.colors.cyan)} ${label.padEnd(16)} ${logger.paint(hint, logger.colors.dim)}`);
+  });
+
+  const answer = await prompt('\n  Selection: ');
+  if (!answer) { logger.dim('Cancelled.'); return; }
+
+  if (answer.trim().toLowerCase() === 'all') {
+    clearAllCache();
+    logger.ok('Cache cleared.');
+    return;
+  }
+
+  const indices = answer.split(',')
+    .map(s => parseInt(s.trim(), 10) - 1)
+    .filter(i => i >= 0 && i < present.length);
+
+  if (!indices.length) { logger.dim('No valid selection — cache unchanged.'); return; }
+
+  const toRemove = indices.map(i => present[i]);
+  clearCacheFields(toRemove);
+  logger.ok(`Removed: ${toRemove.join(', ')}`);
+}
+
+// ─── TUI ──────────────────────────────────────────────────────────────────────
+
+async function runTui() {
+  const { runTui: startTui } = require('./src/tui/index');
+  await startTui();
 }

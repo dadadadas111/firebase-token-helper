@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # needed to create GitHub releases
+
+jobs:
+  build-and-release:
+    name: Build binaries & publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Smoke test
+        run: node index.js --help
+
+      - name: Build standalone binaries
+        run: |
+          mkdir -p dist
+          npx pkg index.js \
+            --targets node18-win-x64,node18-linux-x64,node18-macos-x64,node18-macos-arm64 \
+            --output dist/ftk
+          # pkg appends platform suffix automatically, rename for clarity
+          mv dist/ftk-win.exe   dist/ftk-windows-x64.exe  2>/dev/null || true
+          mv dist/ftk-linux     dist/ftk-linux-x64         2>/dev/null || true
+          mv dist/ftk-macos     dist/ftk-macos-x64         2>/dev/null || true
+          mv dist/ftk-macos-arm64 dist/ftk-macos-arm64     2>/dev/null || true
+          ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ftk-windows-x64.exe
+            dist/ftk-linux-x64
+            dist/ftk-macos-x64
+            dist/ftk-macos-arm64
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+
+      - name: Publish to npm
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

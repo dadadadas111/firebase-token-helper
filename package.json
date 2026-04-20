@@ -1,21 +1,42 @@
 {
   "name": "firebase-token-helper",
   "version": "0.1.0",
-  "description": "CLI helper to generate Firebase ID tokens for a given UID using Admin SDK custom tokens and REST auth exchange",
-  "main": "index.js",
+  "description": "CLI + TUI tool to generate Firebase ID tokens and set custom claims — no frontend login required",
+  "main": "src/commands/getToken.js",
   "bin": {
-    "firebase-token-helper": "index.js"
+    "ftk": "index.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "start": "node index.js",
-    "lint": "echo 'no linter configured'"
+    "build": "pkg index.js --targets node18-win-x64,node18-linux-x64,node18-macos-x64,node18-macos-arm64 --output dist/ftk",
+    "build:win": "pkg index.js --targets node18-win-x64 --output dist/ftk-win.exe",
+    "build:linux": "pkg index.js --targets node18-linux-x64 --output dist/ftk-linux",
+    "build:macos": "pkg index.js --targets node18-macos-x64,node18-macos-arm64 --output dist/ftk-macos"
+  },
+  "pkg": {
+    "scripts": [
+      "src/**/*.js"
+    ],
+    "assets": [],
+    "targets": [
+      "node18-win-x64",
+      "node18-linux-x64",
+      "node18-macos-x64",
+      "node18-macos-arm64"
+    ]
   },
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@clack/prompts": "^1.2.0",
     "dotenv": "^16.3.1",
     "firebase-admin": "^11.10.0",
-    "node-fetch": "^3.3.1",
     "yargs": "^17.7.2"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.17.0"
   }
 }
