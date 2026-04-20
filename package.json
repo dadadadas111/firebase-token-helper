@@ -11,10 +11,10 @@
   },
   "scripts": {
     "start": "node index.js",
-    "build": "pkg index.js --targets node18-win-x64,node18-linux-x64,node18-macos-x64,node18-macos-arm64 --output dist/ftk",
-    "build:win": "pkg index.js --targets node18-win-x64 --output dist/ftk-win.exe",
-    "build:linux": "pkg index.js --targets node18-linux-x64 --output dist/ftk-linux",
-    "build:macos": "pkg index.js --targets node18-macos-x64,node18-macos-arm64 --output dist/ftk-macos"
+    "build": "npx @yao-pkg/pkg index.js --targets node18-win-x64,node18-linux-x64,node18-macos-x64,node18-macos-arm64 --output dist/ftk",
+    "build:win": "npx @yao-pkg/pkg index.js --targets node18-win-x64 --output dist/ftk-win.exe",
+    "build:linux": "npx @yao-pkg/pkg index.js --targets node18-linux-x64 --output dist/ftk-linux",
+    "build:macos": "npx @yao-pkg/pkg index.js --targets node18-macos-x64,node18-macos-arm64 --output dist/ftk-macos"
   },
   "pkg": {
     "scripts": [
@@ -35,8 +35,5 @@
     "dotenv": "^16.3.1",
     "firebase-admin": "^11.10.0",
     "yargs": "^17.7.2"
-  },
-  "devDependencies": {
-    "@yao-pkg/pkg": "^6.17.0"
   }
 }

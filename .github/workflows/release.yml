@@ -32,14 +32,12 @@ jobs:
       - name: Build standalone binaries
         run: |
           mkdir -p dist
-          npx pkg index.js \
-            --targets node18-win-x64,node18-linux-x64,node18-macos-x64,node18-macos-arm64 \
-            --output dist/ftk
+          npm run build
           # pkg appends platform suffix automatically, rename for clarity
-          mv dist/ftk-win.exe   dist/ftk-windows-x64.exe  2>/dev/null || true
-          mv dist/ftk-linux     dist/ftk-linux-x64         2>/dev/null || true
-          mv dist/ftk-macos     dist/ftk-macos-x64         2>/dev/null || true
-          mv dist/ftk-macos-arm64 dist/ftk-macos-arm64     2>/dev/null || true
+          mv dist/ftk-win.exe     dist/ftk-windows-x64.exe 2>/dev/null || true
+          mv dist/ftk-linux       dist/ftk-linux-x64        2>/dev/null || true
+          mv dist/ftk-macos       dist/ftk-macos-x64        2>/dev/null || true
+          mv dist/ftk-macos-arm64 dist/ftk-macos-arm64      2>/dev/null || true
           ls -lh dist/
 
       - name: Create GitHub Release
