@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls *)",
+      "WebSearch",
+      "Bash(npm install *)",
+      "Bash(npm --prefix D:/Repos/firebase-token-helper uninstall node-fetch)",
+      "Bash(node index.js --help)",
+      "Bash(node index.js get-token --help)",
+      "Bash(node index.js set-claims --help)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"require\\('./src/tui/getTokenFlow'\\)\")",
+      "Bash(node -e \"require\\('./src/commands/getToken'\\); require\\('./src/tui/getTokenFlow'\\); console.log\\('OK'\\)\")",
+      "Bash(node index.js clear-cache --help)",
+      "Bash(node -e \"require\\('./src/tui/clearCacheFlow'\\); require\\('./src/lib/cache'\\); console.log\\('OK'\\)\")"
+    ]
+  }
+}

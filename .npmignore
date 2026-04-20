@@ -1,0 +1,13 @@
+# dev / local
+.env
+.env.*
+.firebase/
+.token-helper-cache
+dist/
+
+# CI / repo meta
+.github/
+.claude/
+
+# dev deps
+node_modules/
