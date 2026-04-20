@@ -11,6 +11,7 @@
   },
   "scripts": {
     "start": "node index.js",
+    "postversion": "git push && git push --tags",
     "build": "npx @yao-pkg/pkg index.js --targets node18-win-x64,node18-linux-x64,node18-macos-x64,node18-macos-arm64 --output dist/ftk",
     "build:win": "npx @yao-pkg/pkg index.js --targets node18-win-x64 --output dist/ftk-win.exe",
     "build:linux": "npx @yao-pkg/pkg index.js --targets node18-linux-x64 --output dist/ftk-linux",
