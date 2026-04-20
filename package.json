@@ -1,6 +1,6 @@
 {
   "name": "firebase-token-helper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CLI + TUI tool to generate Firebase ID tokens and set custom claims — no frontend login required",
   "main": "src/commands/getToken.js",
   "bin": {

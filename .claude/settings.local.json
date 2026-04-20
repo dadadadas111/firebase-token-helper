@@ -12,7 +12,10 @@
       "Bash(node -e \"require\\('./src/tui/getTokenFlow'\\)\")",
       "Bash(node -e \"require\\('./src/commands/getToken'\\); require\\('./src/tui/getTokenFlow'\\); console.log\\('OK'\\)\")",
       "Bash(node index.js clear-cache --help)",
-      "Bash(node -e \"require\\('./src/tui/clearCacheFlow'\\); require\\('./src/lib/cache'\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"require\\('./src/tui/clearCacheFlow'\\); require\\('./src/lib/cache'\\); console.log\\('OK'\\)\")",
+      "Bash(node -e \"console.log\\(JSON.parse\\(require\\('fs'\\).readFileSync\\('package-lock.json','utf8'\\)\\).lockfileVersion\\)\")",
+      "Bash(npm --version)",
+      "Bash(npm uninstall *)"
     ]
   }
 }

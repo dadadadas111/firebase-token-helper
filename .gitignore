@@ -3,3 +3,5 @@ node_modules/
 dist/
 .token-helper-cache
 /.firebase
+.claude/settings.local.json
+/.claude
